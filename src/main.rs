@@ -185,7 +185,7 @@ async fn handle_event(
                                             http.add_guild_member_role(
                                                 interaction.guild_id.unwrap(),
                                                 user.id,
-                                                Id::from_str(&guild_member_role)?,
+                                                Id::from_str(guild_member_role)?,
                                             )
                                             .exec()
                                             .await?;
@@ -213,7 +213,7 @@ async fn handle_event(
                         let pool = config.database.get().await?;
                         let mut server_config = ServerConfig::from_db(&pool).await;
 
-                        let cmd_args: Vec<_> = command.split(" ").collect();
+                        let cmd_args: Vec<_> = command.split(' ').collect();
                         if cmd_args.len() == 2
                             && cmd_args
                                 .first()
@@ -221,7 +221,7 @@ async fn handle_event(
                                 .eq_ignore_ascii_case("verified_role")
                         {
                             let verified_role = Id::from_str(
-                                &cmd_args.get(1).unwrap().replace("<@&", "").replace(">", ""),
+                                &cmd_args.get(1).unwrap().replace("<@&", "").replace('>', ""),
                             )?;
                             let mut found_role = false;
 
@@ -241,16 +241,16 @@ async fn handle_event(
                             if found_role {
                                 server_config.verified_role = verified_role.to_string();
                                 server_config.update_db(&pool).await;
-                                format!("Set verified role to <@&{}>", verified_role.to_string())
+                                format!("Set verified role to <@&{}>", verified_role)
                             } else {
-                                format!("Invalid role: <@&{}>", verified_role.to_string())
+                                format!("Invalid role: <@&{}>", verified_role)
                             }
                         } else if cmd_args.len() == 3
                             && cmd_args.first().unwrap().eq_ignore_ascii_case("guild_role")
                         {
                             let guild_name = cmd_args.get(1).unwrap();
                             let guild_role = Id::from_str(
-                                &cmd_args.get(2).unwrap().replace("<@&", "").replace(">", ""),
+                                &cmd_args.get(2).unwrap().replace("<@&", "").replace('>', ""),
                             )?;
                             let mut found_role = false;
 
@@ -267,7 +267,7 @@ async fn handle_event(
                             }
 
                             if !found_role {
-                                format!("Invalid role: <@&{}>", guild_role.to_string())
+                                format!("Invalid role: <@&{}>", guild_role)
                             } else {
                                 match config.hypixel_api.get_guild_by_name(guild_name).await {
                                     Ok(guild_res) => {
@@ -278,7 +278,7 @@ async fn handle_event(
                                         format!(
                                             "Set guild role for {} to {}",
                                             guild_res.guild.name,
-                                            guild_role.to_string()
+                                            guild_role
                                         )
                                     }
                                     Err(err) => err.to_string(),
