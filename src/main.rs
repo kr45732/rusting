@@ -1,13 +1,11 @@
 use bot::{
     config::Config,
-    statics::SELF_USER_ID,
-    structs::{DiscordInfo, ServerConfig},
-    utils::get_timestamp_millis,
+    structs::ServerConfig,
+    utils::{get_discord_info, get_timestamp_millis, SELF_USER_ID},
 };
 use futures::stream::StreamExt;
-use rs_pixel::util::generic_json::Property;
 use std::{error::Error, str::FromStr, sync::Arc};
-use tokio::sync::{Mutex, MutexGuard};
+use tokio::sync::Mutex;
 use twilight_gateway::{Cluster, Event};
 use twilight_http::Client as HttpClient;
 use twilight_model::{
@@ -25,26 +23,7 @@ use twilight_model::{
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let config = Config::load_or_panic().await;
-
-    let pool = config.database.get().await?;
-    pool.simple_query(
-        "CREATE TABLE IF NOT EXISTS linked_accounts (
-            uuid TEXT PRIMARY KEY,
-            username TEXT UNIQUE,
-            discord TEXT UNIQUE,
-            last_updated BIGINT
-        )",
-    )
-    .await?;
-    pool.simple_query(
-        "CREATE TABLE IF NOT EXISTS config (
-            id serial NOT NULL PRIMARY KEY,
-            config json NOT NULL
-        )",
-    )
-    .await?;
-    pool.simple_query("INSERT INTO config (id, config) VALUES(1, '{}') ON CONFLICT DO NOTHING")
-        .await?;
+    config.initialize_database().await?;
 
     let (cluster, mut events) = Cluster::new(
         config.bot_token.clone(),
@@ -68,6 +47,32 @@ async fn main() -> anyhow::Result<()> {
             .id,
     );
 
+    register_commands(&config, &http).await?;
+
+    // let cache = InMemoryCache::builder()
+    //     .resource_types(ResourceType::MESSAGE)
+    //     .build();
+
+    let config_clone = Arc::new(Mutex::new(config));
+
+    while let Some((shard_id, event)) = events.next().await {
+        // cache.update(&event);
+
+        tokio::spawn(handle_event(
+            shard_id,
+            event,
+            Arc::clone(&http),
+            Arc::clone(&config_clone),
+        ));
+    }
+
+    Ok(())
+}
+
+async fn register_commands(
+    config: &Config,
+    http: &Arc<twilight_http::client::Client>,
+) -> anyhow::Result<()> {
     let mut verify_command_opt = ChoiceCommandOptionData::default();
     verify_command_opt.name = String::from("player");
     verify_command_opt.description = String::from("Your in-game username");
@@ -93,23 +98,6 @@ async fn main() -> anyhow::Result<()> {
         .command_options(&[CommandOption::String(settings_command_opt)])?
         .exec()
         .await;
-
-    // let cache = InMemoryCache::builder()
-    //     .resource_types(ResourceType::MESSAGE)
-    //     .build();
-
-    let config_clone = Arc::new(Mutex::new(config));
-
-    while let Some((shard_id, event)) = events.next().await {
-        // cache.update(&event);
-
-        tokio::spawn(handle_event(
-            shard_id,
-            event,
-            Arc::clone(&http),
-            Arc::clone(&config_clone),
-        ));
-    }
 
     Ok(())
 }
@@ -315,24 +303,4 @@ async fn handle_event(
     }
 
     Ok(())
-}
-
-pub async fn get_discord_info(config: &mut MutexGuard<'_, Config>, player: String) -> DiscordInfo {
-    match config.hypixel_api.username_to_uuid(&player).await {
-        Ok(uuid_res) => match config.hypixel_api.get_player_by_uuid(&uuid_res.uuid).await {
-            Ok(player_res) => match player_res.get_string_property("socialMedia.links.DISCORD") {
-                Some(discord_tag) => DiscordInfo {
-                    username: Some(uuid_res.username),
-                    uuid: Some(uuid_res.uuid),
-                    discord: Some(discord_tag),
-                    error: None,
-                },
-                None => {
-                    DiscordInfo::from_err(format!("{} is not linked on Hypixel", uuid_res.username))
-                }
-            },
-            Err(err) => DiscordInfo::from_err(err.to_string()),
-        },
-        Err(err) => DiscordInfo::from_err(err.to_string()),
-    }
 }

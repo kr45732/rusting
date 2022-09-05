@@ -58,4 +58,27 @@ impl Config {
             hypixel_api,
         }
     }
+
+    pub async fn initialize_database(&self) -> anyhow::Result<()> {
+        let pool = self.database.get().await?;
+        pool.simple_query(
+            "CREATE TABLE IF NOT EXISTS linked_accounts (
+                uuid TEXT PRIMARY KEY,
+                username TEXT UNIQUE,
+                discord TEXT UNIQUE,
+                last_updated BIGINT
+            )",
+        )
+        .await?;
+        pool.simple_query(
+            "CREATE TABLE IF NOT EXISTS config (
+                id serial NOT NULL PRIMARY KEY,
+                config json NOT NULL
+            )",
+        )
+        .await?;
+        pool.simple_query("INSERT INTO config (id, config) VALUES(1, '{}') ON CONFLICT DO NOTHING")
+            .await?;
+        Ok(())
+    }
 }

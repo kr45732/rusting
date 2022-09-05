@@ -4,24 +4,30 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-futures = "0.3.24"
-tokio = { default-features = false, features = ["macros", "rt-multi-thread"], version = "1.20.1" }
-anyhow = { default-features = false, features = ["std"], version = "1.0.63" }
-lazy_static = "1.4.0"
-surf = { version = "2.3.2", features = ["curl-client"] }
-
-serde_json = "1.0.83"
-serde = { version = "1.0.143", features = ["derive"] }
-
-dotenv = "0.15.0"
-rs-pixel = "0.1.0"
-
-
-deadpool-postgres = "0.10.2"
-tokio-postgres = { version = "0.7.7", features = ["with-serde_json-1"] }
-
+# Discord API
 twilight-cache-inmemory = "0.13.0"
 twilight-gateway = "0.13.0"
 twilight-http = "0.13.0"
 twilight-model = "0.13.1"
-twilight-util = {features = ["builder"], version = "0.13.1"}
+twilight-util = { features = ["builder"], version = "0.13.1" }
+
+# Runtime
+futures = "0.3.24"
+tokio = { default-features = false, features = ["macros", "rt-multi-thread"], version = "1.20.1" }
+
+# Postgres
+deadpool-postgres = "0.10.2"
+tokio-postgres = { version = "0.7.7", features = ["with-serde_json-1"] }
+
+# Http
+surf = { version = "2.3.2", features = ["curl-client"] }
+rs-pixel = "0.1.0"
+
+# Serde 
+serde_json = "1.0.83"
+serde = { version = "1.0.143", features = ["derive"] }
+
+# Misc
+anyhow = { default-features = false, features = ["std"], version = "1.0.63" }
+dotenv = "0.15.0"
+lazy_static = "1.4.0"
