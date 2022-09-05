@@ -49,7 +49,7 @@ impl Config {
         )
         .await
         .unwrap();
-        println!("Init API instance");
+        println!("Initialized Hypixel API instance");
 
         Config {
             bot_token,

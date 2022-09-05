@@ -1,14 +1,12 @@
-use bot::{config::Config, statics::SELF_USER_ID};
+use bot::{
+    config::Config,
+    statics::SELF_USER_ID,
+    structs::{DiscordInfo, ServerConfig},
+    utils::get_timestamp_millis,
+};
 use futures::stream::StreamExt;
 use rs_pixel::util::generic_json::Property;
-use serde::Deserialize;
-use std::{
-    collections::HashMap,
-    error::Error,
-    str::FromStr,
-    sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
-};
+use std::{error::Error, str::FromStr, sync::Arc};
 use tokio::sync::{Mutex, MutexGuard};
 use twilight_gateway::{Cluster, Event};
 use twilight_http::Client as HttpClient;
@@ -21,6 +19,8 @@ use twilight_model::{
     http::interaction::{InteractionResponse, InteractionResponseType},
     id::Id,
 };
+
+// To anyone who is reading this mess: I wrote this as fast as I could so it is horrendous.
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -43,6 +43,8 @@ async fn main() -> anyhow::Result<()> {
         )",
     )
     .await?;
+    pool.simple_query("INSERT INTO config (id, config) VALUES(1, '{}') ON CONFLICT DO NOTHING")
+        .await?;
 
     let (cluster, mut events) = Cluster::new(
         config.bot_token.clone(),
@@ -67,8 +69,8 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let mut verify_command_opt = ChoiceCommandOptionData::default();
-    verify_command_opt.name = "player".to_string();
-    verify_command_opt.description = "Your in-game username".to_string();
+    verify_command_opt.name = String::from("player");
+    verify_command_opt.description = String::from("Your in-game username");
     verify_command_opt.required = true;
     let _ = http
         .interaction(SELF_USER_ID.lock().await.unwrap())
@@ -78,11 +80,11 @@ async fn main() -> anyhow::Result<()> {
         .exec()
         .await;
 
-    // settings set verified_role <@role>
-    // settings add guild <@role>
+    // settings verified_role <@role>
+    // settings guild_role guild <@role>
     let mut settings_command_opt = ChoiceCommandOptionData::default();
-    settings_command_opt.name = "command".to_string();
-    settings_command_opt.description = "Command".to_string();
+    settings_command_opt.name = String::from("command");
+    settings_command_opt.description = String::from("Command");
     settings_command_opt.required = true;
     let _ = http
         .interaction(SELF_USER_ID.lock().await.unwrap())
@@ -175,11 +177,7 @@ async fn handle_event(
                                 let db_res = pool.query("INSERT INTO linked_account (last_updated, discord, username, uuid) VALUES ($1, $2, $3, $4)", &[&get_timestamp_millis(), &user_id, &username, &uuid] ).await;
 
                                 if db_res.is_ok() {
-                                    let server_config_vec =
-                                        pool.query("SELECT * FROM config", &[]).await?;
-                                    let server_config: ServerConfig = serde_json::from_str(
-                                        server_config_vec.first().unwrap().get("config"),
-                                    )?;
+                                    let server_config = ServerConfig::from_db(&pool).await;
 
                                     http.add_guild_member_role(
                                         interaction.guild_id.unwrap(),
@@ -189,14 +187,120 @@ async fn handle_event(
                                     .exec()
                                     .await?;
 
+                                    if let Ok(guild_res) =
+                                        config.hypixel_api.get_guild_by_player(&uuid).await
+                                    {
+                                        let player_guild_id = guild_res.guild.id;
+                                        if let Some(guild_member_role) =
+                                            server_config.guild_roles.get(&player_guild_id)
+                                        {
+                                            http.add_guild_member_role(
+                                                interaction.guild_id.unwrap(),
+                                                user.id,
+                                                Id::from_str(&guild_member_role)?,
+                                            )
+                                            .exec()
+                                            .await?;
+                                        }
+                                    }
+
                                     format!("Successfully linked {} to {}", user_tag, username)
                                 } else {
-                                    "Error inserting into database".to_string()
+                                    String::from("Error inserting into database")
                                 }
                             }
                         }
                     }
-                    _ => "Unknown Command".to_string(),
+                    "settings" => {
+                        let mut command = String::new();
+                        for opt in &interaction_data.options {
+                            if opt.name == "command" {
+                                if let CommandOptionValue::String(opt_str) = &opt.value {
+                                    command = opt_str.to_string();
+                                }
+                            }
+                        }
+
+                        let mut config = config.lock().await;
+                        let pool = config.database.get().await?;
+                        let mut server_config = ServerConfig::from_db(&pool).await;
+
+                        let cmd_args: Vec<_> = command.split(" ").collect();
+                        if cmd_args.len() == 2
+                            && cmd_args
+                                .first()
+                                .unwrap()
+                                .eq_ignore_ascii_case("verified_role")
+                        {
+                            let verified_role = Id::from_str(
+                                &cmd_args.get(1).unwrap().replace("<@&", "").replace(">", ""),
+                            )?;
+                            let mut found_role = false;
+
+                            let roles = http
+                                .roles(interaction.guild_id.unwrap())
+                                .exec()
+                                .await?
+                                .model()
+                                .await?;
+                            for role in roles {
+                                if role.id == verified_role {
+                                    found_role = true;
+                                    break;
+                                }
+                            }
+
+                            if found_role {
+                                server_config.verified_role = verified_role.to_string();
+                                server_config.update_db(&pool).await;
+                                format!("Set verified role to <@&{}>", verified_role.to_string())
+                            } else {
+                                format!("Invalid role: <@&{}>", verified_role.to_string())
+                            }
+                        } else if cmd_args.len() == 3
+                            && cmd_args.first().unwrap().eq_ignore_ascii_case("guild_role")
+                        {
+                            let guild_name = cmd_args.get(1).unwrap();
+                            let guild_role = Id::from_str(
+                                &cmd_args.get(2).unwrap().replace("<@&", "").replace(">", ""),
+                            )?;
+                            let mut found_role = false;
+
+                            for role in http
+                                .roles(interaction.guild_id.unwrap())
+                                .exec()
+                                .await?
+                                .model()
+                                .await?
+                            {
+                                if role.id == guild_role {
+                                    found_role = true;
+                                }
+                            }
+
+                            if !found_role {
+                                format!("Invalid role: <@&{}>", guild_role.to_string())
+                            } else {
+                                match config.hypixel_api.get_guild_by_name(guild_name).await {
+                                    Ok(guild_res) => {
+                                        server_config
+                                            .guild_roles
+                                            .insert(guild_res.guild.id, guild_role.to_string());
+                                        server_config.update_db(&pool).await;
+                                        format!(
+                                            "Set guild role for {} to {}",
+                                            guild_res.guild.name,
+                                            guild_role.to_string()
+                                        )
+                                    }
+                                    Err(err) => err.to_string(),
+                                }
+                            }
+                        } else {
+                            String::from("Invalid Command")
+                        }
+                    }
+                    _ => String::from("Unknown Command"),
                 };
 
                 let _ = http
@@ -231,34 +335,4 @@ pub async fn get_discord_info(config: &mut MutexGuard<'_, Config>, player: Strin
         },
         Err(err) => DiscordInfo::from_err(err.to_string()),
     }
-}
-
-pub struct DiscordInfo {
-    pub username: Option<String>,
-    pub uuid: Option<String>,
-    pub discord: Option<String>,
-    pub error: Option<String>,
-}
-impl DiscordInfo {
-    pub fn from_err(err: String) -> Self {
-        Self {
-            username: None,
-            uuid: None,
-            discord: None,
-            error: Some(err),
-        }
-    }
-}
-
-pub fn get_timestamp_millis() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64
-}
-
-#[derive(Deserialize)]
-pub struct ServerConfig {
-    pub verified_role: String,
-    pub guild_roles: HashMap<String, String>,
 }
