@@ -1,16 +1,17 @@
 use bot::{
     config::Config,
-    structs::ServerConfig,
+    structs::{CommandOptionBuilder, ServerConfig},
     utils::{get_discord_info, get_timestamp_millis, SELF_USER_ID},
 };
 use futures::stream::StreamExt;
+use std::fmt::Write;
 use std::{error::Error, str::FromStr, sync::Arc};
 use tokio::sync::Mutex;
 use twilight_gateway::{Cluster, Event};
 use twilight_http::Client as HttpClient;
 use twilight_model::{
     application::{
-        command::{ChoiceCommandOptionData, CommandOption},
+        command::CommandOption,
         interaction::{application_command::CommandOptionValue, InteractionData},
     },
     gateway::Intents,
@@ -73,29 +74,52 @@ async fn register_commands(
     config: &Config,
     http: &Arc<twilight_http::client::Client>,
 ) -> anyhow::Result<()> {
-    let mut verify_command_opt = ChoiceCommandOptionData::default();
-    verify_command_opt.name = String::from("player");
-    verify_command_opt.description = String::from("Your in-game username");
-    verify_command_opt.required = true;
+    let self_user_id = SELF_USER_ID.lock().await.unwrap();
+
     let _ = http
-        .interaction(SELF_USER_ID.lock().await.unwrap())
+        .interaction(self_user_id)
         .create_guild_command(config.guild_id)
         .chat_input("verify", "Link your Hypixel account")?
-        .command_options(&[CommandOption::String(verify_command_opt)])?
+        .command_options(&[CommandOption::String(
+            CommandOptionBuilder::new("player", "Your in-game username")
+                .set_required(true)
+                .into(),
+        )])?
         .exec()
         .await;
 
+    // settings view
     // settings verified_role <@role>
     // settings guild_role guild <@role>
-    let mut settings_command_opt = ChoiceCommandOptionData::default();
-    settings_command_opt.name = String::from("command");
-    settings_command_opt.description = String::from("Command");
-    settings_command_opt.required = true;
+    // settings reqs weight:
     let _ = http
-        .interaction(SELF_USER_ID.lock().await.unwrap())
+        .interaction(self_user_id)
         .create_guild_command(config.guild_id)
-        .chat_input("settings", "Configure the bot's settings")?
-        .command_options(&[CommandOption::String(settings_command_opt)])?
+        .chat_input("settings", "View or configure the bot's settings")?
+        .command_options(&[CommandOption::String(
+            CommandOptionBuilder::new("command", "Subcommand to execute")
+                .set_required(true)
+                .into(),
+        )])?
+        .exec()
+        .await;
+
+    let _ = http
+        .interaction(self_user_id)
+        .create_guild_command(config.guild_id)
+        .chat_input("user", "See what account a user is linked to")?
+        .command_options(&[CommandOption::User(
+            CommandOptionBuilder::new("user", "Discord user")
+                .set_required(true)
+                .into(),
+        )])?
+        .exec()
+        .await;
+
+    let _ = http
+        .interaction(self_user_id)
+        .create_guild_command(config.guild_id)
+        .chat_input("reqs", "Check if a player meets the requirements")?
         .exec()
         .await;
 
@@ -165,7 +189,7 @@ async fn handle_event(
                                 let db_res = pool.query("INSERT INTO linked_account (last_updated, discord, username, uuid) VALUES ($1, $2, $3, $4)", &[&get_timestamp_millis(), &user_id, &username, &uuid] ).await;
 
                                 if db_res.is_ok() {
-                                    let server_config = ServerConfig::from_db(&pool).await;
+                                    let server_config = ServerConfig::read_config(&pool).await;
 
                                     http.add_guild_member_role(
                                         interaction.guild_id.unwrap(),
@@ -211,7 +235,7 @@ async fn handle_event(
 
                         let mut config = config.lock().await;
                         let pool = config.database.get().await?;
-                        let mut server_config = ServerConfig::from_db(&pool).await;
+                        let mut server_config = ServerConfig::read_config(&pool).await;
 
                         let cmd_args: Vec<_> = command.split(' ').collect();
                         if cmd_args.len() == 2
@@ -240,7 +264,7 @@ async fn handle_event(
 
                             if found_role {
                                 server_config.verified_role = verified_role.to_string();
-                                server_config.update_db(&pool).await;
+                                server_config.write_config(&pool).await;
                                 format!("Set verified role to <@&{}>", verified_role)
                             } else {
                                 format!("Invalid role: <@&{}>", verified_role)
@@ -274,19 +298,65 @@ async fn handle_event(
                                         server_config
                                             .guild_roles
                                             .insert(guild_res.guild.id, guild_role.to_string());
-                                        server_config.update_db(&pool).await;
+                                        server_config.write_config(&pool).await;
                                         format!(
                                             "Set guild role for {} to {}",
-                                            guild_res.guild.name,
-                                            guild_role
+                                            guild_res.guild.name, guild_role
                                         )
                                     }
                                     Err(err) => err.to_string(),
                                 }
                             }
+                        } else if cmd_args.len() == 1
+                            && cmd_args.get(0).unwrap().eq_ignore_ascii_case("view")
+                        {
+                            let mut out = format!(
+                                "Verified Role: <@&{}>\nGuild Roles: ",
+                                server_config.verified_role
+                            );
+                            for guild_role in server_config.guild_roles {
+                                let guild_res = config
+                                    .hypixel_api
+                                    .get_guild_by_id(&guild_role.0)
+                                    .await
+                                    .unwrap();
+                                write!(
+                                    out,
+                                    "\n  • {}: <@&{}>",
+                                    guild_res.guild.name, guild_role.1
+                                )?;
+                            }
+                            out
                         } else {
                             String::from("Invalid Command")
                         }
+                    }
+                    "user" => {
+                        let mut user = &Id::from_str("0")?;
+                        for opt in &interaction_data.options {
+                            if opt.name == "player" {
+                                if let CommandOptionValue::User(opt_user) = &opt.value {
+                                    user = opt_user;
+                                }
+                            }
+                        }
+
+                        let config = config.lock().await;
+                        let pool = config.database.get().await?;
+                        let db_res_vec = pool
+                            .query(
+                                "SELECT * FROM linked_accounts WHERE discord = $1",
+                                &[&user.to_string()],
+                            )
+                            .await?;
+                        let db_res = db_res_vec.get(0).unwrap();
+
+                        let username: String = db_res.get("username");
+                        let uuid: String = db_res.get("uuid");
+                        format!(
+                            "{} is linked to [{}](https://mine.ly/{})",
+                            user, username, uuid
+                        )
                     }
                     _ => String::from("Unknown Command"),
                 };
