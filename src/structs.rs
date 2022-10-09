@@ -9,6 +9,27 @@ pub struct ServerConfig {
     pub verified_role: String,
     #[serde(default = "Default::default")]
     pub guild_roles: HashMap<String, String>,
+    #[serde(default = "Default::default")]
+    pub guild_reqs: HashMap<String, GuildReqs>,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct GuildReqs {
+    pub slayer: i64,
+    pub skills: i64,
+    pub catacombs: i64,
+    pub weight: i64,
+}
+
+impl Default for GuildReqs {
+    fn default() -> Self {
+        GuildReqs {
+            slayer: 0,
+            skills: 0,
+            catacombs: 0,
+            weight: 0,
+        }
+    }
 }
 
 impl ServerConfig {

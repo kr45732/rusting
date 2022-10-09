@@ -3,6 +3,7 @@ use rs_pixel::util::generic_json::Property;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::{Mutex, MutexGuard};
 use twilight_model::id::{marker::ApplicationMarker, Id};
+use twilight_util::builder::embed::EmbedBuilder;
 
 use crate::{config::Config, structs::DiscordInfo};
 
@@ -35,4 +36,8 @@ pub async fn get_discord_info(config: &mut MutexGuard<'_, Config>, player: Strin
         },
         Err(err) => DiscordInfo::from_err(err.to_string()),
     }
+}
+
+pub fn default_embed(title: &str) -> EmbedBuilder {
+    EmbedBuilder::new().title(title)
 }
