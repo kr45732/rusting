@@ -21,6 +21,7 @@ use twilight_model::{
     http::interaction::{InteractionResponse, InteractionResponseType},
     id::Id,
 };
+use twilight_util::builder::embed::EmbedFieldBuilder;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -235,12 +236,52 @@ async fn handle_reqs_command(
     interaction: &Box<InteractionCreate>,
     interaction_data: &Box<CommandData>,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let mut player = String::new();
+    for opt in &interaction_data.options {
+        if opt.name == "player" {
+            if let CommandOptionValue::String(opt_str) = &opt.value {
+                player = opt_str.to_string();
+            }
+        }
+    }
+
+    let mut profile = String::new();
+    for opt in &interaction_data.options {
+        if opt.name == "profile" {
+            if let CommandOptionValue::String(opt_str) = &opt.value {
+                profile = opt_str.to_string();
+            }
+        }
+    }
+
+    let mut config = config.lock().await;
+
+    let uuid_response = config.hypixel_api.username_to_uuid(&player).await?;
+    let sb_response = config
+        .hypixel_api
+        .get_skyblock_profiles_by_uuid(&uuid_response.uuid)
+        .await?;
+    let sb_profile = if profile.is_empty() {
+        sb_response.get_last_played_profile()
+    } else {
+        sb_response.get_profile_by_name(&profile)
+    }
+    .ok_or("No profile found")?;
+
+    let mut eb = default_embed("Requirement Checker");
+
+    let pool = config.database.get().await?;
+    let server_config = ServerConfig::read_config(&pool).await;
+
+    for req in server_config.guild_reqs {
+        let cur_reqs = req.1;
+        eb = eb.field(EmbedFieldBuilder::new(req.0, "").build());
+    }
+
     let _ = http
         .interaction(SELF_USER_ID.lock().await.unwrap())
         .create_followup(&interaction.token)
-        .embeds(&[default_embed("Error")
-            .description("Unknown Command")
-            .build()])?
+        .embeds(&[eb.build()])?
         .exec()
         .await?;
 
@@ -268,14 +309,14 @@ async fn handle_verify_command(
 
     let discord_info = get_discord_info(&mut config, player).await;
     if let Some(err) = discord_info.error {
-        eb = default_embed("Settings").description(err);
+        eb = default_embed("Verify").description(err);
     } else {
         let user = interaction.member.as_ref().unwrap().user.as_ref().unwrap();
         let user_tag = format!("{}#{}", user.name, user.discriminator());
         let api_discord_tag = discord_info.discord.unwrap();
 
         if api_discord_tag != user_tag {
-            eb = default_embed("Settings").description(format!(
+            eb = default_embed("Verify").description(format!(
                 "Your Discord tag (`{}`) does not match the in-game Discord tag (`{}`)",
                 user_tag, api_discord_tag
             ));
@@ -305,23 +346,25 @@ async fn handle_verify_command(
                 .await?;
 
                 if let Ok(guild_res) = config.hypixel_api.get_guild_by_player(&uuid).await {
-                    let player_guild_id = guild_res.guild.ok_or("Invalid guild")?.id;
-                    if let Some(guild_member_role) = server_config.guild_roles.get(&player_guild_id)
-                    {
-                        http.add_guild_member_role(
-                            interaction.guild_id.unwrap(),
-                            user.id,
-                            Id::from_str(guild_member_role)?,
-                        )
-                        .exec()
-                        .await?;
+                    if let Some(player_guild) = guild_res.guild {
+                        if let Some(guild_member_role) =
+                            server_config.guild_roles.get(&player_guild.id)
+                        {
+                            http.add_guild_member_role(
+                                interaction.guild_id.unwrap(),
+                                user.id,
+                                Id::from_str(guild_member_role)?,
+                            )
+                            .exec()
+                            .await?;
+                        }
                     }
                 }
 
-                eb = default_embed("Settings")
+                eb = default_embed("Verify")
                     .description(format!("Successfully linked {} to {}", user_tag, username));
             } else {
-                eb = default_embed("Settings").description("Error inserting into database");
+                eb = default_embed("Verify").description("Error inserting into database");
             }
         }
     }
@@ -413,22 +456,20 @@ async fn handle_settings_command(
         if !found_role {
             eb = default_embed("Settings").description(format!("Invalid role: <@&{}>", guild_role));
         } else {
-            match config.hypixel_api.get_guild_by_name(guild_name).await {
-                Ok(guild_res) => {
-                    let guild_res_obj = guild_res.guild.ok_or("Invalid guild")?;
-                    server_config
-                        .guild_roles
-                        .insert(guild_res_obj.id, guild_role.to_string());
-                    server_config.write_config(&pool).await;
-                    eb = default_embed("Settings").description(format!(
-                        "Set guild role for {} to <@&{}>",
-                        guild_res_obj.name, guild_role
-                    ));
-                }
-                Err(err) => {
-                    eb = default_embed("Settings").description(err.to_string());
-                }
-            }
+            let guild = config
+                .hypixel_api
+                .get_guild_by_name(guild_name)
+                .await?
+                .guild
+                .ok_or("Invalid guild")?;
+            server_config
+                .guild_roles
+                .insert(guild.id, guild_role.to_string());
+            server_config.write_config(&pool).await;
+            eb = default_embed("Settings").description(format!(
+                "Set guild role for {} to <@&{}>",
+                guild.name, guild_role
+            ));
         }
     } else if cmd_args.len() == 1 && cmd_args.get(0).unwrap() == &"view" {
         let mut out = format!(
@@ -436,11 +477,7 @@ async fn handle_settings_command(
             server_config.verified_role
         );
         for guild_role in server_config.guild_roles {
-            let guild_res = config
-                .hypixel_api
-                .get_guild_by_id(&guild_role.0)
-                .await
-                .unwrap();
+            let guild_res = config.hypixel_api.get_guild_by_id(&guild_role.0).await?;
             write!(
                 out,
                 "\n  • {}: <@&{}>",

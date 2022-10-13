@@ -21,7 +21,7 @@ tokio-postgres = { version = "0.7.7", features = ["with-serde_json-1"] }
 
 # Http
 surf = { version = "2.3.2", features = ["curl-client"] }
-rs-pixel = "0.1.0"
+rs-pixel = "0.1.1"
 
 # Serde 
 serde_json = "1.0.83"

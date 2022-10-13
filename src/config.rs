@@ -43,12 +43,10 @@ impl Config {
             .try_into()
             .unwrap();
 
-        let hypixel_api = RsPixel::from_config(
-            &api_key,
-            ConfigBuilder::default().client(http_client).into(),
-        )
-        .await
-        .unwrap();
+        let hypixel_api =
+            RsPixel::from_config(api_key, ConfigBuilder::default().client(http_client).into())
+                .await
+                .unwrap();
         println!("Initialized Hypixel API instance");
 
         Config {

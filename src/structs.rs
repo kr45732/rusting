@@ -70,15 +70,15 @@ impl DiscordInfo {
 pub struct CommandOptionBuilder(ChoiceCommandOptionData);
 
 impl CommandOptionBuilder {
-    pub fn new(name: &str, description: &str) -> Self {
+    pub fn new(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self(ChoiceCommandOptionData {
             autocomplete: false,
             choices: Vec::new(),
-            description: description.to_string(),
+            description: description.into(),
             description_localizations: None,
             max_length: None,
             min_length: None,
-            name: name.to_string(),
+            name: name.into(),
             name_localizations: None,
             required: false,
         })
